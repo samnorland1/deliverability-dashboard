@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient, ClientWithMetrics, PostmasterSnapshot } from "@/lib/supabase";
+import { requireAuth } from "@/lib/auth";
 
 function snap(id: string, clientId: string, date: string, o: number, c: number, b: number, u: number, s: number, fo: number, fc: number, fb: number, fu: number, fs: number) {
   return { id, client_id: clientId, snapshot_date: date, campaign_open_rate: o, campaign_click_rate: c, campaign_bounce_rate: b, campaign_unsub_rate: u, campaign_spam_rate: s, flow_open_rate: fo, flow_click_rate: fc, flow_bounce_rate: fb, flow_unsub_rate: fu, flow_spam_rate: fs, created_at: date };
@@ -12,7 +13,9 @@ const DEMO_DATA: ClientWithMetrics[] = [
     postmaster: null },
 ];
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const authError = requireAuth(req);
+  if (authError) return authError;
   const supabase = createServiceClient();
 
   const { data: clients, error: clientsError } = await supabase

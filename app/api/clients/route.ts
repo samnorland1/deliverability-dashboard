@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
+import { requireAuth } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const authError = requireAuth(req);
+  if (authError) return authError;
+
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from("clients")
@@ -22,6 +26,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const authError = requireAuth(req);
+  if (authError) return authError;
+
   const { name, api_key, sending_domain } = await req.json();
 
   if (!name?.trim() || !api_key?.trim()) {
@@ -43,6 +50,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
+  const authError = requireAuth(req);
+  if (authError) return authError;
+
   const { id, sending_domain } = await req.json();
 
   if (!id) {
@@ -63,6 +73,9 @@ export async function PATCH(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const authError = requireAuth(req);
+  if (authError) return authError;
+
   const { id } = await req.json();
 
   if (!id) {
