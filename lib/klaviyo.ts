@@ -234,16 +234,18 @@ async function fetchWindowMetrics(
   const flowStats = await fetchKlaviyoReport(apiKey, conversionMetricId, "flow", dateWindow);
 
   return {
-    campaign_open_rate:   campaignStats?.open_rate   ?? null,
-    campaign_click_rate:  campaignStats?.click_rate  ?? null,
-    campaign_bounce_rate: campaignStats?.bounce_rate ?? null,
-    campaign_unsub_rate:  campaignStats?.unsub_rate  ?? null,
-    campaign_spam_rate:   campaignStats?.spam_rate   ?? null,
-    flow_open_rate:       flowStats?.open_rate       ?? null,
-    flow_click_rate:      flowStats?.click_rate      ?? null,
-    flow_bounce_rate:     flowStats?.bounce_rate     ?? null,
-    flow_unsub_rate:      flowStats?.unsub_rate      ?? null,
-    flow_spam_rate:       flowStats?.spam_rate       ?? null,
+    campaign_open_rate:   (campaignStats?.open_rate   ?? null) as number | null,
+    campaign_click_rate:  (campaignStats?.click_rate  ?? null) as number | null,
+    campaign_bounce_rate: (campaignStats?.bounce_rate ?? null) as number | null,
+    campaign_unsub_rate:  (campaignStats?.unsub_rate  ?? null) as number | null,
+    campaign_spam_rate:   (campaignStats?.spam_rate   ?? null) as number | null,
+    campaign_emails_sent: (campaignStats?.emails_sent ?? null) as number | null,
+    flow_open_rate:       (flowStats?.open_rate       ?? null) as number | null,
+    flow_click_rate:      (flowStats?.click_rate      ?? null) as number | null,
+    flow_bounce_rate:     (flowStats?.bounce_rate     ?? null) as number | null,
+    flow_unsub_rate:      (flowStats?.unsub_rate      ?? null) as number | null,
+    flow_spam_rate:       (flowStats?.spam_rate       ?? null) as number | null,
+    flow_emails_sent:     (flowStats?.emails_sent     ?? null) as number | null,
   };
 }
 
@@ -259,8 +261,10 @@ export async function fetchAllMetrics(
     return {
       campaign_open_rate: null, campaign_click_rate: null,
       campaign_bounce_rate: null, campaign_unsub_rate: null, campaign_spam_rate: null,
+      campaign_emails_sent: null,
       flow_open_rate: null, flow_click_rate: null,
       flow_bounce_rate: null, flow_unsub_rate: null, flow_spam_rate: null,
+      flow_emails_sent: null,
     };
   }
   return fetchWindowMetrics(apiKey, conversionMetricId, dateWindow);
@@ -281,8 +285,10 @@ export async function fetchAllMetricsBothWindows(apiKey: string): Promise<{
     const empty: KlaviyoMetrics = {
       campaign_open_rate: null, campaign_click_rate: null,
       campaign_bounce_rate: null, campaign_unsub_rate: null, campaign_spam_rate: null,
+      campaign_emails_sent: null,
       flow_open_rate: null, flow_click_rate: null,
       flow_bounce_rate: null, flow_unsub_rate: null, flow_spam_rate: null,
+      flow_emails_sent: null,
     };
     return { current: empty, previous: empty, currentDate: current.end, previousDate: previous.end };
   }
