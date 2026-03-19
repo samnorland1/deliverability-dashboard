@@ -116,7 +116,7 @@ async function fetchKlaviyoReport(
   conversionMetricId: string,
   type: "campaign" | "flow",
   dateWindow: DateWindow
-): Promise<Record<string, number> | null> {
+): Promise<Record<string, number | null> | null> {
   const endpoint =
     type === "campaign"
       ? "https://a.klaviyo.com/api/campaign-values-reports/"
