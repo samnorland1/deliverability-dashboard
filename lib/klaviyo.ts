@@ -178,6 +178,9 @@ async function fetchKlaviyoReport(
     let rateCount = 0;
 
     for (const result of results) {
+      // Skip SMS campaigns — open tracking doesn't apply and skews email metrics
+      if (result.groupings?.send_channel && result.groupings.send_channel !== "email") continue;
+
       const s = result.statistics || {};
       const delivered = s.delivered ?? 0;
       totalDelivered += delivered;

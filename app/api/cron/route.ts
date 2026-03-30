@@ -40,6 +40,8 @@ export async function GET(req: NextRequest) {
           fetchAllMetrics(client.api_key, previous),
         ]);
 
+        const toRow = ({ campaign_emails_sent: _ce, flow_emails_sent: _fe, ...rest }: typeof currentMetrics) => rest;
+
         // Upsert current snapshot
         const { error: currentError } = await supabase
           .from("metrics_snapshots")
@@ -47,7 +49,7 @@ export async function GET(req: NextRequest) {
             {
               client_id: client.id,
               snapshot_date: current.end,
-              ...currentMetrics,
+              ...toRow(currentMetrics),
             },
             { onConflict: "client_id,snapshot_date" }
           );
@@ -61,7 +63,7 @@ export async function GET(req: NextRequest) {
             {
               client_id: client.id,
               snapshot_date: previous.end,
-              ...previousMetrics,
+              ...toRow(previousMetrics),
             },
             { onConflict: "client_id,snapshot_date" }
           );

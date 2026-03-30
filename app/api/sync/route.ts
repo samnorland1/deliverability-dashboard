@@ -33,10 +33,13 @@ export async function GET(req: NextRequest) {
       const { current, previous, currentDate, previousDate } =
         await fetchAllMetricsBothWindows(client.api_key);
 
+      // Strip fields not in the metrics_snapshots schema (e.g. emails_sent)
+      const toRow = ({ campaign_emails_sent: _ce, flow_emails_sent: _fe, ...rest }: typeof current) => rest;
+
       const { error: e1 } = await supabase
         .from("metrics_snapshots")
         .upsert(
-          { client_id: client.id, snapshot_date: currentDate, ...current },
+          { client_id: client.id, snapshot_date: currentDate, ...toRow(current) },
           { onConflict: "client_id,snapshot_date" }
         );
       if (e1) throw new Error(e1.message);
@@ -44,7 +47,7 @@ export async function GET(req: NextRequest) {
       const { error: e2 } = await supabase
         .from("metrics_snapshots")
         .upsert(
-          { client_id: client.id, snapshot_date: previousDate, ...previous },
+          { client_id: client.id, snapshot_date: previousDate, ...toRow(previous) },
           { onConflict: "client_id,snapshot_date" }
         );
       if (e2) throw new Error(e2.message);

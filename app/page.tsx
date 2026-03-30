@@ -9,6 +9,7 @@ import { DomainReputation } from "@/lib/postmaster";
 
 type Theme = "dark" | "light";
 type Zoom = "compact" | "normal" | "large";
+type SortBy = "custom" | "score" | "name";
 type MetricDef = { key: keyof MetricsSnapshot; label: string; higherIsBetter: boolean };
 
 // ─── Theme tokens ─────────────────────────────────────────────────────────────
@@ -427,22 +428,45 @@ function PrioritiesPanel({ clients, tok }: { clients: ClientWithMetrics[]; tok: 
           <span style={{ fontSize: "11px", color: tok["--text-dim"], transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s", display: "inline-block" }}>▼</span>
         </button>
 
-        {open && (
-          <div style={{ borderTop: `1px solid ${tok["--card-border"]}`, padding: "8px 14px 12px", display: "flex", flexWrap: "wrap", gap: "6px" }}>
-            {priorities.map((p, i) => (
-              <div key={i} style={{
-                display: "flex", alignItems: "center", gap: "6px",
-                padding: "5px 10px", borderRadius: "6px",
-                background: `${p.color}10`, border: `1px solid ${p.color}30`,
-              }}>
-                <span style={{ fontSize: "11px", fontWeight: 600, color: tok["--text-primary"] }}>{p.clientName}</span>
-                <span style={{ fontSize: "11px", color: tok["--text-secondary"] }}>—</span>
-                <span style={{ fontSize: "11px", color: p.color, fontWeight: 500 }}>{p.label}</span>
-                <span style={{ fontSize: "11px", fontFamily: "var(--font-mono)", color: p.color, fontWeight: 700 }}>{p.value}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {open && (() => {
+          // Group by client
+          const byClient: Record<string, Priority[]> = {};
+          for (const p of priorities) {
+            if (!byClient[p.clientName]) byClient[p.clientName] = [];
+            byClient[p.clientName].push(p);
+          }
+          const clients = Object.keys(byClient);
+          return (
+            <div style={{ borderTop: `1px solid ${tok["--card-border"]}` }}>
+              {clients.map((clientName, ci) => (
+                <div key={clientName} style={{
+                  display: "grid", gridTemplateColumns: "180px 1fr",
+                  borderBottom: ci < clients.length - 1 ? `1px solid ${tok["--card-border"]}` : "none",
+                }}>
+                  <div style={{
+                    padding: "10px 14px", fontSize: "12px", fontWeight: 600,
+                    color: tok["--text-primary"], borderRight: `1px solid ${tok["--card-border"]}`,
+                    display: "flex", alignItems: "center",
+                  }}>
+                    {clientName}
+                  </div>
+                  <div style={{ padding: "8px 12px", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+                    {byClient[clientName].map((p, i) => (
+                      <div key={i} style={{
+                        display: "flex", alignItems: "center", gap: "5px",
+                        padding: "4px 9px", borderRadius: "6px",
+                        background: `${p.color}10`, border: `1px solid ${p.color}30`,
+                      }}>
+                        <span style={{ fontSize: "11px", color: p.color, fontWeight: 500 }}>{p.label}</span>
+                        <span style={{ fontSize: "11px", fontFamily: "var(--font-mono)", color: p.color, fontWeight: 700 }}>{p.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -531,7 +555,7 @@ function ClientCard({ client, index, zoom, isDemo, isDragging, isOver, onDragSta
             {client.current?.snapshot_date && (
               <div style={{ fontSize: "11px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
                 {(() => {
-                  const end = new Date(); end.setDate(end.getDate() - 3);
+                  const end = new Date(client.current!.snapshot_date + "T00:00:00");
                   const start = new Date(end); start.setDate(start.getDate() - 29);
                   const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
                   return `${fmt(start)} – ${fmt(end)}`;
@@ -643,6 +667,7 @@ export default function DashboardPage() {
   const [isDemo, setIsDemo] = useState(false);
   const [theme, setTheme] = useState<Theme>("dark");
   const [zoom, setZoom] = useState<Zoom>("normal");
+  const [sortBy, setSortBy] = useState<SortBy>("custom");
   const [search, setSearch] = useState("");
   const [scoreInfoOpen, setScoreInfoOpen] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -653,9 +678,11 @@ export default function DashboardPage() {
   useEffect(() => {
     const t = localStorage.getItem("dd-theme") as Theme | null;
     const z = localStorage.getItem("dd-zoom") as Zoom | null;
+    const s = localStorage.getItem("dd-sortby") as SortBy | null;
     const o = localStorage.getItem("dd-order");
     if (t) setTheme(t);
     if (z) setZoom(z);
+    if (s) setSortBy(s);
     if (o) setOrder(JSON.parse(o));
   }, []);
 
@@ -677,13 +704,26 @@ export default function DashboardPage() {
   useEffect(() => { load(); }, [load]);
 
   // Sorted + filtered clients
-  const sortedClients = order.length
-    ? [...clients].sort((a, b) => {
-        const ai = order.indexOf(a.id);
-        const bi = order.indexOf(b.id);
-        return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-      })
-    : clients;
+  const sortedClients = (() => {
+    if (sortBy === "score") {
+      return [...clients].sort((a, b) => {
+        const scoreA = a.current ? calcScore(a.current) : -1;
+        const scoreB = b.current ? calcScore(b.current) : -1;
+        return scoreB - scoreA; // Highest first
+      });
+    }
+    if (sortBy === "name") {
+      return [...clients].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    // Custom order (drag)
+    return order.length
+      ? [...clients].sort((a, b) => {
+          const ai = order.indexOf(a.id);
+          const bi = order.indexOf(b.id);
+          return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+        })
+      : clients;
+  })();
 
   const filtered = search.trim()
     ? sortedClients.filter(c => c.name.toLowerCase().includes(search.toLowerCase()))
@@ -698,6 +738,11 @@ export default function DashboardPage() {
   function setZoomSave(z: Zoom) {
     setZoom(z);
     localStorage.setItem("dd-zoom", z);
+  }
+
+  function setSortBySave(s: SortBy) {
+    setSortBy(s);
+    localStorage.setItem("dd-sortby", s);
   }
 
   async function handleSync() {
@@ -918,7 +963,31 @@ export default function DashboardPage() {
           <span style={{ fontSize: "11px", color: tok["--text-dim"] }}>vs. previous 30 days</span>
 
           {search && <span style={{ marginLeft: "auto", fontSize: "12px", color: tok["--text-dim"] }}>{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>}
-          {!search && <span style={{ marginLeft: "auto", fontSize: "11px", color: tok["--text-dim"] }}>Drag cards to reorder</span>}
+
+          {/* Sort dropdown */}
+          <div style={{ marginLeft: search ? "12px" : "auto", display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "11px", color: tok["--text-dim"] }}>Sort:</span>
+            <select
+              value={sortBy}
+              onChange={e => setSortBySave(e.target.value as SortBy)}
+              style={{
+                padding: "4px 8px",
+                borderRadius: "6px",
+                background: tok["--surface"],
+                border: `1px solid ${tok["--card-border"]}`,
+                color: tok["--text-primary"],
+                fontSize: "11px",
+                fontFamily: "var(--font-ui)",
+                cursor: "pointer",
+                outline: "none",
+              }}
+            >
+              <option value="custom">Custom</option>
+              <option value="score">Score</option>
+              <option value="name">Name</option>
+            </select>
+            {sortBy === "custom" && <span style={{ fontSize: "10px", color: tok["--text-dim"] }}>(drag to reorder)</span>}
+          </div>
         </div>
       </div>
 

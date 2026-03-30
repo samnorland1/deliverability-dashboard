@@ -50,8 +50,21 @@ async function listDomains(accessToken: string): Promise<string[]> {
 
 // Fetches the most recent traffic stats entry for a domain
 async function fetchLatestStats(accessToken: string, domain: string): Promise<PostmasterStats | null> {
+  // Request only the last 90 days so we land near the end of available data
+  // without needing to paginate through years of history.
+  // Stats are returned ascending (oldest first), so we take the last entry.
+  const start = new Date();
+  start.setDate(start.getDate() - 90);
+
+  const params = new URLSearchParams({
+    pageSize: "30",
+    "startDate.year":  start.getFullYear().toString(),
+    "startDate.month": (start.getMonth() + 1).toString(),
+    "startDate.day":   start.getDate().toString(),
+  });
+
   const res = await fetch(
-    `${POSTMASTER_API}/domains/${encodeURIComponent(domain)}/trafficStats?pageSize=5`,
+    `${POSTMASTER_API}/domains/${encodeURIComponent(domain)}/trafficStats?${params}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
@@ -61,15 +74,15 @@ async function fetchLatestStats(accessToken: string, domain: string): Promise<Po
   }
 
   const data = await res.json();
-  const stats = data.trafficStats;
+  let stats = data.trafficStats;
 
   if (!stats || stats.length === 0) {
     console.log(`Postmaster: no traffic stats for ${domain} (insufficient volume?)`);
     return null;
   }
 
-  // Stats are returned newest-first. Take the first (most recent).
-  const latest = stats[0];
+  // Stats are ascending by date — take the last (most recent)
+  const latest = stats[stats.length - 1];
 
   // Extract date from name like "domains/example.com/trafficStats/20240315"
   const nameParts = (latest.name as string).split("/");
