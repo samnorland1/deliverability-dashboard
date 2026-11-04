@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { ClientWithMetrics, MetricsSnapshot, PostmasterSnapshot } from "@/lib/supabase";
 import { DomainReputation } from "@/lib/postmaster";
+import { PERIODS, PeriodDays } from "@/lib/klaviyo";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -174,7 +175,7 @@ function GoogleIcon() {
   );
 }
 
-function PostmasterSection({ postmaster, labelSize }: { postmaster: PostmasterSnapshot; labelSize: number }) {
+function PostmasterSection({ postmaster, labelSize, days }: { postmaster: PostmasterSnapshot; labelSize: number; days: PeriodDays }) {
   const domRep = postmaster.domain_reputation;
   const domColor = repColor(domRep);
   const domEmpty = !domRep || domRep === "REPUTATION_CATEGORY_UNSPECIFIED";
@@ -195,7 +196,7 @@ function PostmasterSection({ postmaster, labelSize }: { postmaster: PostmasterSn
             Postmaster
           </span>
         </div>
-        <span style={{ fontSize: "10px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>30 days</span>
+        <span style={{ fontSize: "10px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{days} days</span>
       </div>
 
       {/* Domain Reputation */}
@@ -509,8 +510,8 @@ function ClientLogo({ domain, size }: { domain: string; size: number }) {
 
 // ─── ClientCard ───────────────────────────────────────────────────────────────
 
-function ClientCard({ client, index, zoom, isDemo, isDragging, isOver, onDragStart, onDragEnter, onDragEnd }: {
-  client: ClientWithMetrics; index: number; zoom: Zoom; isDemo: boolean;
+function ClientCard({ client, index, zoom, days, isDemo, isDragging, isOver, onDragStart, onDragEnter, onDragEnd }: {
+  client: ClientWithMetrics; index: number; zoom: Zoom; days: PeriodDays; isDemo: boolean;
   isDragging: boolean; isOver: boolean;
   onDragStart: () => void; onDragEnter: () => void; onDragEnd: () => void;
 }) {
@@ -556,7 +557,7 @@ function ClientCard({ client, index, zoom, isDemo, isDragging, isOver, onDragSta
               <div style={{ fontSize: "11px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
                 {(() => {
                   const end = new Date(client.current!.snapshot_date + "T00:00:00");
-                  const start = new Date(end); start.setDate(start.getDate() - 29);
+                  const start = new Date(end); start.setDate(start.getDate() - ((client.current!.period_days ?? days) - 1));
                   const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
                   return `${fmt(start)} – ${fmt(end)}`;
                 })()}
@@ -647,7 +648,7 @@ function ClientCard({ client, index, zoom, isDemo, isDragging, isOver, onDragSta
             </div>
           )}
           {!isCompact && client.postmaster && (
-            <PostmasterSection postmaster={client.postmaster} labelSize={z.labelSize} />
+            <PostmasterSection postmaster={client.postmaster} labelSize={z.labelSize} days={days} />
           )}
         </div>
       )}
@@ -668,6 +669,7 @@ export default function DashboardPage() {
   const [theme, setTheme] = useState<Theme>("dark");
   const [zoom, setZoom] = useState<Zoom>("normal");
   const [sortBy, setSortBy] = useState<SortBy>("custom");
+  const [days, setDays] = useState<PeriodDays | null>(null);
   const [search, setSearch] = useState("");
   const [scoreInfoOpen, setScoreInfoOpen] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -680,15 +682,18 @@ export default function DashboardPage() {
     const z = localStorage.getItem("dd-zoom") as Zoom | null;
     const s = localStorage.getItem("dd-sortby") as SortBy | null;
     const o = localStorage.getItem("dd-order");
+    const d = Number(localStorage.getItem("dd-period"));
     if (t) setTheme(t);
     if (z) setZoom(z);
     if (s) setSortBy(s);
     if (o) setOrder(JSON.parse(o));
+    setDays((PERIODS as readonly number[]).includes(d) ? (d as PeriodDays) : 30);
   }, []);
 
   const load = useCallback(async () => {
+    if (days == null) return; // wait for the saved period so we don't load 30 days first
     try {
-      const res = await fetch("/api/dashboard");
+      const res = await fetch(`/api/dashboard?days=${days}`);
       if (!res.ok) throw new Error("Failed to load");
       const data: ClientWithMetrics[] = await res.json();
       setClients(data);
@@ -699,7 +704,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [days]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -740,6 +745,11 @@ export default function DashboardPage() {
     localStorage.setItem("dd-zoom", z);
   }
 
+  function setDaysSave(d: PeriodDays) {
+    setDays(d);
+    localStorage.setItem("dd-period", String(d));
+  }
+
   function setSortBySave(s: SortBy) {
     setSortBy(s);
     localStorage.setItem("dd-sortby", s);
@@ -749,7 +759,7 @@ export default function DashboardPage() {
     setSyncing(true);
     setError(null);
     try {
-      const res = await fetch("/api/sync");
+      const res = await fetch(`/api/sync?days=${period}`);
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         setError(d.error ?? "Sync failed");
@@ -780,6 +790,7 @@ export default function DashboardPage() {
 
   const synced = clients.filter(c => c.current && !c.id.startsWith("demo-")).length;
   const tok = THEMES[theme];
+  const period = days ?? 30;
 
   return (
     <div style={{ minHeight: "100vh", background: tok["--bg"], color: tok["--text-primary"], fontFamily: "var(--font-ui)", ...Object.fromEntries(Object.entries(tok).map(([k, v]) => [k, v])) }}>
@@ -960,7 +971,17 @@ export default function DashboardPage() {
           </div>
 
           <div style={{ width: "1px", height: "14px", background: tok["--card-border"] }} />
-          <span style={{ fontSize: "11px", color: tok["--text-dim"] }}>vs. previous 30 days</span>
+          {/* Period */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div style={{ display: "flex", borderRadius: "7px", overflow: "hidden", border: `1px solid ${tok["--card-border"]}`, flexShrink: 0 }}>
+              {PERIODS.map(d => (
+                <button key={d} onClick={() => setDaysSave(d)} style={{ padding: "4px 10px", background: days === d ? tok["--accent"] : tok["--surface"], border: "none", color: days === d ? "white" : tok["--text-secondary"], fontSize: "11px", fontWeight: days === d ? 600 : 400, fontFamily: "var(--font-mono)", cursor: "pointer", transition: "all 0.15s" }}>
+                  {d}D
+                </button>
+              ))}
+            </div>
+            <span style={{ fontSize: "11px", color: tok["--text-dim"] }}>vs. previous {period} days</span>
+          </div>
 
           {search && <span style={{ marginLeft: "auto", fontSize: "12px", color: tok["--text-dim"] }}>{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>}
 
@@ -1016,7 +1037,7 @@ export default function DashboardPage() {
           <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${ZOOM_CONFIG[zoom].minCard}px, 1fr))`, gap: "16px" }}>
             {filtered.map((c, i) => (
               <ClientCard
-                key={c.id} client={c} index={i} zoom={zoom} isDemo={isDemo}
+                key={c.id} client={c} index={i} zoom={zoom} days={period} isDemo={isDemo}
                 isDragging={dragIndex === i} isOver={overIndex === i}
                 onDragStart={() => handleDragStart(i)}
                 onDragEnter={() => handleDragEnter(i)}

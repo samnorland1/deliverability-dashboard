@@ -23,20 +23,28 @@ function formatDate(date: Date): string {
   return date.toISOString().split("T")[0];
 }
 
-export function getDateWindows(): { current: DateWindow; previous: DateWindow } {
+export const PERIODS = [7, 30, 90] as const;
+export type PeriodDays = (typeof PERIODS)[number];
+
+export function parsePeriod(v: string | null | undefined): PeriodDays {
+  const n = Number(v);
+  return (PERIODS as readonly number[]).includes(n) ? (n as PeriodDays) : 30;
+}
+
+export function getDateWindows(days: PeriodDays = 30): { current: DateWindow; previous: DateWindow } {
   const now = new Date();
 
   const currentEnd = new Date(now);
   currentEnd.setDate(currentEnd.getDate() - 4); // 3-day buffer so recent campaigns don't skew figures
 
   const currentStart = new Date(currentEnd);
-  currentStart.setDate(currentStart.getDate() - 29);
+  currentStart.setDate(currentStart.getDate() - (days - 1));
 
   const previousEnd = new Date(currentStart);
   previousEnd.setDate(previousEnd.getDate() - 1);
 
   const previousStart = new Date(previousEnd);
-  previousStart.setDate(previousStart.getDate() - 29);
+  previousStart.setDate(previousStart.getDate() - (days - 1));
 
   return {
     current: { start: formatDate(currentStart), end: formatDate(currentEnd) },
@@ -252,35 +260,14 @@ async function fetchWindowMetrics(
   };
 }
 
-export async function fetchAllMetrics(
-  apiKey: string,
-  dateWindow: DateWindow
-): Promise<KlaviyoMetrics> {
-  // conversionMetricId is passed in from outside (fetched once per sync, not per call)
-  // This function signature kept for compatibility — but we re-fetch here for simplicity
-  const conversionMetricId = await getConversionMetricId(apiKey);
-  if (!conversionMetricId) {
-    console.error("Could not fetch Klaviyo conversion metric ID");
-    return {
-      campaign_open_rate: null, campaign_click_rate: null,
-      campaign_bounce_rate: null, campaign_unsub_rate: null, campaign_spam_rate: null,
-      campaign_emails_sent: null,
-      flow_open_rate: null, flow_click_rate: null,
-      flow_bounce_rate: null, flow_unsub_rate: null, flow_spam_rate: null,
-      flow_emails_sent: null,
-    };
-  }
-  return fetchWindowMetrics(apiKey, conversionMetricId, dateWindow);
-}
-
 // Optimised entry point: fetches conversion metric ID once, then runs current + previous sequentially
-export async function fetchAllMetricsBothWindows(apiKey: string): Promise<{
+export async function fetchAllMetricsBothWindows(apiKey: string, days: PeriodDays = 30): Promise<{
   current: KlaviyoMetrics;
   previous: KlaviyoMetrics;
   currentDate: string;
   previousDate: string;
 }> {
-  const { current, previous } = getDateWindows();
+  const { current, previous } = getDateWindows(days);
 
   const conversionMetricId = await getConversionMetricId(apiKey);
   if (!conversionMetricId) {

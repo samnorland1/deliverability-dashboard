@@ -48,69 +48,79 @@ async function listDomains(accessToken: string): Promise<string[]> {
   );
 }
 
-// Fetches the most recent traffic stats entry for a domain
-async function fetchLatestStats(accessToken: string, domain: string): Promise<PostmasterStats | null> {
-  // Request only the last 90 days so we land near the end of available data
-  // without needing to paginate through years of history.
-  // Stats are returned ascending (oldest first), so we take the last entry.
-  const start = new Date();
-  start.setDate(start.getDate() - 90);
+type TrafficStat = {
+  name: string;
+  domainReputation?: DomainReputation;
+  ipReputations?: { reputation?: DomainReputation; numIps?: number }[];
+  userReportedSpamRatio?: number;
+  dkimSuccessRatio?: number;
+  spfSuccessRatio?: number;
+  dmarcSuccessRatio?: number;
+};
 
-  const params = new URLSearchParams({
-    pageSize: "30",
-    "startDate.year":  start.getFullYear().toString(),
-    "startDate.month": (start.getMonth() + 1).toString(),
-    "startDate.day":   start.getDate().toString(),
-  });
-
-  const res = await fetch(
-    `${POSTMASTER_API}/domains/${encodeURIComponent(domain)}/trafficStats?${params}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-
-  if (!res.ok) {
-    console.error(`Postmaster trafficStats failed for ${domain}: ${res.status}`);
-    return null;
-  }
-
-  const data = await res.json();
-  let stats = data.trafficStats;
-
-  if (!stats || stats.length === 0) {
-    console.log(`Postmaster: no traffic stats for ${domain} (insufficient volume?)`);
-    return null;
-  }
-
-  // Stats are ascending by date — take the last (most recent)
-  const latest = stats[stats.length - 1];
-
+function toStats(domain: string, stat: TrafficStat): PostmasterStats {
   // Extract date from name like "domains/example.com/trafficStats/20240315"
-  const nameParts = (latest.name as string).split("/");
+  const nameParts = stat.name.split("/");
   const dateStr = nameParts[nameParts.length - 1]; // "20240315"
   const snapshot_date = `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`;
 
   // IP reputation: take the dominant one (highest numIps count)
   let ip_reputation: DomainReputation | null = null;
-  if (latest.ipReputations && latest.ipReputations.length > 0) {
-    const sorted = [...latest.ipReputations].sort(
-      (a: { numIps: number }, b: { numIps: number }) => (b.numIps ?? 0) - (a.numIps ?? 0)
-    );
+  if (stat.ipReputations && stat.ipReputations.length > 0) {
+    const sorted = [...stat.ipReputations].sort((a, b) => (b.numIps ?? 0) - (a.numIps ?? 0));
     ip_reputation = sorted[0].reputation ?? null;
   }
 
   return {
     domain,
     snapshot_date,
-    domain_reputation: latest.domainReputation ?? null,
+    domain_reputation: stat.domainReputation ?? null,
     ip_reputation,
-    spam_rate: latest.userReportedSpamRatio ?? null,
-    dkim_success_rate: latest.dkimSuccessRatio ?? null,
-    spf_success_rate: latest.spfSuccessRatio ?? null,
-    dmarc_success_rate: latest.dmarcSuccessRatio ?? null,
+    spam_rate: stat.userReportedSpamRatio ?? null,
+    dkim_success_rate: stat.dkimSuccessRatio ?? null,
+    spf_success_rate: stat.spfSuccessRatio ?? null,
+    dmarc_success_rate: stat.dmarcSuccessRatio ?? null,
   };
 }
 
-// Fetches latest stats only for the specified domains (those linked to clients)
+// Fetches every daily traffic stats entry for a domain over the last 95 days
+// (enough to cover the 90-day view plus Postmaster's reporting lag)
+async function fetchDailyStats(accessToken: string, domain: string): Promise<PostmasterStats[]> {
+  const start = new Date();
+  start.setDate(start.getDate() - 95);
+
+  const all: PostmasterStats[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({
+      pageSize: "100",
+      "startDate.year":  start.getFullYear().toString(),
+      "startDate.month": (start.getMonth() + 1).toString(),
+      "startDate.day":   start.getDate().toString(),
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+
+    const res = await fetch(
+      `${POSTMASTER_API}/domains/${encodeURIComponent(domain)}/trafficStats?${params}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    if (!res.ok) {
+      console.error(`Postmaster trafficStats failed for ${domain}: ${res.status}`);
+      break;
+    }
+
+    const data = await res.json();
+    for (const stat of (data.trafficStats ?? []) as TrafficStat[]) all.push(toStats(domain, stat));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  if (all.length === 0) console.log(`Postmaster: no traffic stats for ${domain} (insufficient volume?)`);
+  return all;
+}
+
+// Fetches daily stats only for the specified domains (those linked to clients)
 export async function fetchAllPostmasterStats(domainsToFetch: string[]): Promise<PostmasterStats[]> {
   if (domainsToFetch.length === 0) return [];
 
@@ -120,14 +130,12 @@ export async function fetchAllPostmasterStats(domainsToFetch: string[]): Promise
 
   // Fetch in parallel — small set so no rate limit concern
   const settled = await Promise.allSettled(
-    domainsToFetch.map(domain => fetchLatestStats(accessToken, domain))
+    domainsToFetch.map(domain => fetchDailyStats(accessToken, domain))
   );
 
   const results: PostmasterStats[] = [];
   for (const result of settled) {
-    if (result.status === "fulfilled" && result.value) {
-      results.push(result.value);
-    }
+    if (result.status === "fulfilled") results.push(...result.value);
   }
 
   return results;

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient, ClientWithMetrics, PostmasterSnapshot } from "@/lib/supabase";
 import { requireAuth } from "@/lib/auth";
+import { parsePeriod } from "@/lib/klaviyo";
 
 function snap(id: string, clientId: string, date: string, o: number, c: number, b: number, u: number, s: number, fo: number, fc: number, fb: number, fu: number, fs: number) {
-  return { id, client_id: clientId, snapshot_date: date, campaign_open_rate: o, campaign_click_rate: c, campaign_bounce_rate: b, campaign_unsub_rate: u, campaign_spam_rate: s, flow_open_rate: fo, flow_click_rate: fc, flow_bounce_rate: fb, flow_unsub_rate: fu, flow_spam_rate: fs, created_at: date };
+  return { id, client_id: clientId, period_days: 30, snapshot_date: date, campaign_open_rate: o, campaign_click_rate: c, campaign_bounce_rate: b, campaign_unsub_rate: u, campaign_spam_rate: s, flow_open_rate: fo, flow_click_rate: fc, flow_bounce_rate: fb, flow_unsub_rate: fu, flow_spam_rate: fs, created_at: date };
 }
 
 const DEMO_DATA: ClientWithMetrics[] = [
@@ -16,6 +17,7 @@ const DEMO_DATA: ClientWithMetrics[] = [
 export async function GET(req: NextRequest) {
   const authError = requireAuth(req);
   if (authError) return authError;
+  const days = parsePeriod(req.nextUrl.searchParams.get("days"));
   const supabase = createServiceClient();
 
   const { data: clients, error: clientsError } = await supabase
@@ -38,28 +40,54 @@ export async function GET(req: NextRequest) {
     .from("metrics_snapshots")
     .select("*")
     .in("client_id", clientIds)
+    .eq("period_days", days)
     .order("snapshot_date", { ascending: false });
 
   if (snapshotsError) {
     return NextResponse.json({ error: snapshotsError.message }, { status: 500 });
   }
 
-  // Fetch latest postmaster snapshot per domain
+  // Postmaster: average the daily stats over the selected period, ending at each domain's latest day
   const domains = clients.map(c => c.sending_domain).filter(Boolean) as string[];
-  let postmasterByDomain: Record<string, PostmasterSnapshot> = {};
+  const postmasterByDomain: Record<string, PostmasterSnapshot> = {};
 
   if (domains.length > 0) {
+    const since = new Date();
+    since.setDate(since.getDate() - 95);
     const { data: pmData } = await supabase
       .from("postmaster_snapshots")
       .select("*")
       .in("domain", domains)
+      .gte("snapshot_date", since.toISOString().split("T")[0])
       .order("snapshot_date", { ascending: false });
 
-    // Keep only the most recent per domain
-    for (const row of pmData ?? []) {
-      if (!postmasterByDomain[row.domain]) {
-        postmasterByDomain[row.domain] = row as PostmasterSnapshot;
-      }
+    const rowsByDomain: Record<string, PostmasterSnapshot[]> = {};
+    for (const row of (pmData ?? []) as PostmasterSnapshot[]) {
+      (rowsByDomain[row.domain] ??= []).push(row);
+    }
+
+    for (const [domain, rows] of Object.entries(rowsByDomain)) {
+      const latest = rows[0];
+      const cutoff = new Date(latest.snapshot_date + "T00:00:00");
+      cutoff.setDate(cutoff.getDate() - (days - 1));
+      const cutoffStr = cutoff.toISOString().split("T")[0];
+      const inWindow = rows.filter(r => r.snapshot_date >= cutoffStr);
+
+      const mean = (key: keyof PostmasterSnapshot) => {
+        const vals = inWindow.map(r => r[key]).filter((v): v is number => typeof v === "number");
+        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      };
+
+      postmasterByDomain[domain] = {
+        ...latest,
+        // Reputation is a category, so show the most recent reading in the window
+        domain_reputation: inWindow.find(r => r.domain_reputation)?.domain_reputation ?? null,
+        ip_reputation: inWindow.find(r => r.ip_reputation)?.ip_reputation ?? null,
+        spam_rate: mean("spam_rate"),
+        dkim_success_rate: mean("dkim_success_rate"),
+        spf_success_rate: mean("spf_success_rate"),
+        dmarc_success_rate: mean("dmarc_success_rate"),
+      };
     }
   }
 

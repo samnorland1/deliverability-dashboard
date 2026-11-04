@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
-import { fetchAllMetricsBothWindows } from "@/lib/klaviyo";
+import { parsePeriod } from "@/lib/klaviyo";
+import { syncClientPeriod, syncPostmaster } from "@/lib/sync";
 
 export const maxDuration = 300;
 
+// Syncs the selected period only (?days=7|30|90) so a manual sync stays inside the time limit
 export async function GET(req: NextRequest) {
   const cookie = req.cookies.get("auth_token")?.value;
   const secret = process.env.AUTH_SECRET;
@@ -11,6 +13,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const days = parsePeriod(req.nextUrl.searchParams.get("days"));
   const supabase = createServiceClient();
 
   const { data: clients, error: clientsError } = await supabase
@@ -30,35 +33,7 @@ export async function GET(req: NextRequest) {
   // Process clients sequentially to avoid Klaviyo rate limits
   for (const client of clients) {
     try {
-      const { current, previous, currentDate, previousDate } =
-        await fetchAllMetricsBothWindows(client.api_key);
-
-      // Strip fields not in the metrics_snapshots schema (e.g. emails_sent)
-      const toRow = ({ campaign_emails_sent: _ce, flow_emails_sent: _fe, ...rest }: typeof current) => rest;
-
-      const { error: e1 } = await supabase
-        .from("metrics_snapshots")
-        .upsert(
-          { client_id: client.id, snapshot_date: currentDate, ...toRow(current) },
-          { onConflict: "client_id,snapshot_date" }
-        );
-      if (e1) throw new Error(e1.message);
-
-      const { error: e2 } = await supabase
-        .from("metrics_snapshots")
-        .upsert(
-          { client_id: client.id, snapshot_date: previousDate, ...toRow(previous) },
-          { onConflict: "client_id,snapshot_date" }
-        );
-      if (e2) throw new Error(e2.message);
-
-      // Delete any stale snapshots that don't match the current windows
-      await supabase
-        .from("metrics_snapshots")
-        .delete()
-        .eq("client_id", client.id)
-        .not("snapshot_date", "in", `(${currentDate},${previousDate})`);
-
+      await syncClientPeriod(supabase, client, days);
       results.push({ name: client.name, status: "ok" });
     } catch (err) {
       results.push({
@@ -69,5 +44,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ message: "Sync complete", fetched: results.length, results });
+  let postmaster: number | string;
+  try {
+    postmaster = await syncPostmaster(supabase);
+  } catch (err) {
+    postmaster = err instanceof Error ? err.message : "Unknown error";
+  }
+
+  return NextResponse.json({ message: "Sync complete", days, fetched: results.length, results, postmaster });
 }

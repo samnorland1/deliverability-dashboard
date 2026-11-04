@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
-import { fetchAllMetrics, getDateWindows } from "@/lib/klaviyo";
+import { PERIODS } from "@/lib/klaviyo";
+import { syncClientPeriod, syncPostmaster } from "@/lib/sync";
 
 export const maxDuration = 300; // 5 minutes for Pro plan
 
@@ -14,7 +15,6 @@ export async function GET(req: NextRequest) {
   }
 
   const supabase = createServiceClient();
-  const { current, previous } = getDateWindows();
 
   // Fetch all clients
   const { data: clients, error: clientsError } = await supabase
@@ -31,66 +31,34 @@ export async function GET(req: NextRequest) {
 
   const results: { name: string; status: string; error?: string }[] = [];
 
-  // Fetch all clients in parallel
+  // Clients run in parallel (each is its own Klaviyo account); periods run sequentially per client
   await Promise.all(
     clients.map(async (client) => {
-      try {
-        const [currentMetrics, previousMetrics] = await Promise.all([
-          fetchAllMetrics(client.api_key, current),
-          fetchAllMetrics(client.api_key, previous),
-        ]);
-
-        const toRow = ({ campaign_emails_sent: _ce, flow_emails_sent: _fe, ...rest }: typeof currentMetrics) => rest;
-
-        // Upsert current snapshot
-        const { error: currentError } = await supabase
-          .from("metrics_snapshots")
-          .upsert(
-            {
-              client_id: client.id,
-              snapshot_date: current.end,
-              ...toRow(currentMetrics),
-            },
-            { onConflict: "client_id,snapshot_date" }
-          );
-
-        if (currentError) throw new Error(currentError.message);
-
-        // Upsert previous snapshot
-        const { error: previousError } = await supabase
-          .from("metrics_snapshots")
-          .upsert(
-            {
-              client_id: client.id,
-              snapshot_date: previous.end,
-              ...toRow(previousMetrics),
-            },
-            { onConflict: "client_id,snapshot_date" }
-          );
-
-        if (previousError) throw new Error(previousError.message);
-
-        // Delete stale snapshots outside the current windows
-        await supabase
-          .from("metrics_snapshots")
-          .delete()
-          .eq("client_id", client.id)
-          .not("snapshot_date", "in", `(${current.end},${previous.end})`);
-
-        results.push({ name: client.name, status: "ok" });
-      } catch (err) {
-        results.push({
-          name: client.name,
-          status: "error",
-          error: err instanceof Error ? err.message : "Unknown error",
-        });
+      const failed: string[] = [];
+      for (const days of PERIODS) {
+        try {
+          await syncClientPeriod(supabase, client, days);
+        } catch (err) {
+          failed.push(`${days}d: ${err instanceof Error ? err.message : "Unknown error"}`);
+        }
       }
+      results.push(failed.length
+        ? { name: client.name, status: "error", error: failed.join("; ") }
+        : { name: client.name, status: "ok" });
     })
   );
+
+  let postmaster: number | string;
+  try {
+    postmaster = await syncPostmaster(supabase);
+  } catch (err) {
+    postmaster = err instanceof Error ? err.message : "Unknown error";
+  }
 
   return NextResponse.json({
     message: "Sync complete",
     fetched: results.length,
     results,
+    postmaster,
   });
 }

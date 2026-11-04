@@ -38,3 +38,5 @@ Bounce, Unsub, Spam only have two states: green (great) or red (not great). No a
 - `/api/sync` is the browser-safe sync route (cookie auth). `/api/cron` is for Vercel cron (CRON_SECRET header).
 - Klaviyo rate limits: sequential calls only, 1.5s between campaign/flow, 2s between windows.
 - `spam_complaint_rate` and `spam_complaints` are valid Klaviyo stat names.
+- Periods: 7 / 30 / 90 days. `metrics_snapshots.period_days` holds the period (unique on client_id, period_days, snapshot_date). Sync Now (`/api/sync?days=N`) syncs the selected period only; the daily cron syncs all three plus Postmaster.
+- Postmaster stores one row per domain per day (last 95 days); the dashboard averages DMARC and spam over the selected period and shows the most recent domain reputation.

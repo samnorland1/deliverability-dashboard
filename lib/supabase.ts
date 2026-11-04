@@ -12,6 +12,7 @@ export type Client = {
 export type MetricsSnapshot = {
   id: string;
   client_id: string;
+  period_days: number;
   snapshot_date: string;
   campaign_open_rate: number | null;
   campaign_click_rate: number | null;
