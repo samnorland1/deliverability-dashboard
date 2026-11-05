@@ -7,6 +7,7 @@ export type Client = {
   api_key: string;
   sending_domain: string | null;
   created_at: string;
+  last_audit_at?: string | null;
 };
 
 export type MetricsSnapshot = {

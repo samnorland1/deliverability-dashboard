@@ -508,10 +508,63 @@ function ClientLogo({ domain, size }: { domain: string; size: number }) {
   );
 }
 
+// ─── Audit checkbox ───────────────────────────────────────────────────────────
+
+const AUDIT_DAYS = 14;
+
+function auditDaysLeft(lastAuditAt: string | null | undefined): number | null {
+  if (!lastAuditAt) return null;
+  const ageMs = Date.now() - new Date(lastAuditAt).getTime();
+  const left = AUDIT_DAYS - Math.floor(ageMs / 86_400_000);
+  return left > 0 ? left : null;
+}
+
+function AuditCheck({ lastAuditAt, onToggle }: { lastAuditAt: string | null | undefined; onToggle: (checked: boolean) => Promise<void> }) {
+  const [saving, setSaving] = useState(false);
+  const left = auditDaysLeft(lastAuditAt);
+  const checked = left != null;
+  const doneOn = lastAuditAt ? new Date(lastAuditAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      disabled={saving}
+      draggable={false}
+      onMouseDown={e => e.stopPropagation()}
+      onClick={async e => {
+        e.stopPropagation();
+        setSaving(true);
+        try { await onToggle(!checked); } finally { setSaving(false); }
+      }}
+      title={checked ? `Audit done ${doneOn}. Resets in ${left} day${left === 1 ? "" : "s"}. Click to untick.` : `Tick when you've done an audit. It stays ticked for ${AUDIT_DAYS} days.`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: "6px", marginTop: "6px",
+        background: "none", border: "none", padding: 0, cursor: saving ? "wait" : "pointer",
+        opacity: saving ? 0.6 : 1, fontSize: "11px",
+        color: checked ? "var(--positive)" : "var(--text-dim)",
+      }}
+    >
+      <span style={{
+        width: "14px", height: "14px", borderRadius: "4px", flexShrink: 0,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        border: `1.5px solid ${checked ? "var(--positive)" : "var(--text-dim)"}`,
+        background: checked ? "var(--positive)" : "transparent",
+        color: "var(--card)", fontSize: "10px", fontWeight: 800, lineHeight: 1,
+      }}>
+        {checked ? "✓" : ""}
+      </span>
+      <span>{checked ? `Audited ${doneOn} · ${left}d left` : "Audit (14d)"}</span>
+    </button>
+  );
+}
+
 // ─── ClientCard ───────────────────────────────────────────────────────────────
 
-function ClientCard({ client, index, zoom, days, isDemo, isDragging, isOver, onDragStart, onDragEnter, onDragEnd }: {
+function ClientCard({ client, index, zoom, days, isDemo, isDragging, isOver, onDragStart, onDragEnter, onDragEnd, onAuditToggle }: {
   client: ClientWithMetrics; index: number; zoom: Zoom; days: PeriodDays; isDemo: boolean;
+  onAuditToggle: (checked: boolean) => Promise<void>;
   isDragging: boolean; isOver: boolean;
   onDragStart: () => void; onDragEnter: () => void; onDragEnd: () => void;
 }) {
@@ -563,6 +616,7 @@ function ClientCard({ client, index, zoom, days, isDemo, isDragging, isOver, onD
                 })()}
               </div>
             )}
+            {!isDemo && <AuditCheck lastAuditAt={client.last_audit_at} onToggle={onAuditToggle} />}
           </div>
         </div>
 
@@ -753,6 +807,23 @@ export default function DashboardPage() {
   function setSortBySave(s: SortBy) {
     setSortBy(s);
     localStorage.setItem("dd-sortby", s);
+  }
+
+  async function handleAuditToggle(id: string, checked: boolean) {
+    const value = checked ? new Date().toISOString() : null;
+    const prev = clients.find(c => c.id === id)?.last_audit_at ?? null;
+    setClients(cs => cs.map(c => c.id === id ? { ...c, last_audit_at: value } : c));
+    try {
+      const res = await fetch("/api/clients", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, last_audit_at: value }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "Failed to save audit");
+    } catch (e) {
+      setClients(cs => cs.map(c => c.id === id ? { ...c, last_audit_at: prev } : c));
+      setError(e instanceof Error ? e.message : "Failed to save audit");
+    }
   }
 
   async function handleSync() {
@@ -1042,6 +1113,7 @@ export default function DashboardPage() {
                 onDragStart={() => handleDragStart(i)}
                 onDragEnter={() => handleDragEnter(i)}
                 onDragEnd={handleDragEnd}
+                onAuditToggle={checked => handleAuditToggle(c.id, checked)}
               />
             ))}
           </div>

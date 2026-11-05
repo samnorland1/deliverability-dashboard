@@ -53,16 +53,31 @@ export async function PATCH(req: NextRequest) {
   const authError = requireAuth(req);
   if (authError) return authError;
 
-  const { id, sending_domain } = await req.json();
+  const body = await req.json();
+  const { id } = body;
 
   if (!id) {
     return NextResponse.json({ error: "ID is required" }, { status: 400 });
   }
 
+  // Only update the fields that were sent
+  const update: Record<string, string | null> = {};
+  if ("sending_domain" in body) update.sending_domain = body.sending_domain?.trim() || null;
+  if ("last_audit_at" in body) {
+    const v = body.last_audit_at;
+    if (v !== null && (typeof v !== "string" || isNaN(Date.parse(v)))) {
+      return NextResponse.json({ error: "last_audit_at must be a date or null" }, { status: 400 });
+    }
+    update.last_audit_at = v;
+  }
+  if (Object.keys(update).length === 0) {
+    return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+  }
+
   const supabase = createServiceClient();
   const { error } = await supabase
     .from("clients")
-    .update({ sending_domain: sending_domain?.trim() || null })
+    .update(update)
     .eq("id", id);
 
   if (error) {

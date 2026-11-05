@@ -35,6 +35,13 @@ export async function GET(req: NextRequest) {
 
   const clientIds = clients.map((c) => c.id);
 
+  // Audit dates live in their own query so the dashboard still loads if the column is missing
+  const auditById: Record<string, string | null> = {};
+  const { data: audits } = await supabase.from("clients").select("id, last_audit_at");
+  for (const a of (audits ?? []) as { id: string; last_audit_at: string | null }[]) {
+    auditById[a.id] = a.last_audit_at;
+  }
+
   // Fetch the 2 most recent snapshots for each client
   const { data: snapshots, error: snapshotsError } = await supabase
     .from("metrics_snapshots")
@@ -106,6 +113,7 @@ export async function GET(req: NextRequest) {
     const clientSnapshots = snapshotsByClient[client.id] ?? [];
     return {
       ...client,
+      last_audit_at: auditById[client.id] ?? null,
       current: clientSnapshots[0] ?? null,
       previous: clientSnapshots[1] ?? null,
       postmaster: client.sending_domain ? (postmasterByDomain[client.sending_domain] ?? null) : null,
