@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ClientWithMetrics, MetricsSnapshot, PostmasterSnapshot } from "@/lib/supabase";
 import { DomainReputation } from "@/lib/postmaster";
 import { PERIODS, PeriodDays } from "@/lib/klaviyo";
+import ChatPanel from "@/components/ChatPanel";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1119,6 +1120,8 @@ export default function DashboardPage() {
           </div>
         )}
       </main>
+
+      {!isDemo && <ChatPanel tok={tok} days={period} />}
     </div>
   );
 }
